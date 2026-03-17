@@ -40,9 +40,13 @@ if not cap or not cap.isOpened():
 
 print("System running... Press ESC to exit")
 
+analyzer = behavior_module.BehaviorAnalyzer()
+frame_id = 0
+
 while cap.isOpened():
     success, frame = cap.read()
     if not success: break
+    frame_id += 1
 
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(rgb)
@@ -70,9 +74,20 @@ while cap.isOpened():
                     cv2.putText(frame, f"BPM: {bpm:.0f}", (20, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     cv2.putText(frame, f"Status: {status}", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-            # 3. Asad's Behavior Module
-            behavior_status = behavior_module.detect_behavior(frame, landmarks)
-            cv2.putText(frame, f"Behavior: {behavior_status}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            # --- 3. ASAD'S BEHAVIOR MODULE (REPLACED) ---
+            # Step A: Landmarks ko normalized se pixel coordinates mein convert karein
+            h, w, _ = frame.shape
+            landmarks_list = [(int(lm.x * w), int(lm.y * h)) for lm in landmarks.landmark]
+
+            # Step B: Behavior detect karein (Class method call)
+            # Note: frame_id loop ke start mein 'frame_id += 1' karke initialize kar lena
+            behavior_status = analyzer.detect_behavior(frame, landmarks_list, frame_id)
+            
+            # Step C: UI Rendering with Dynamic Color
+            # Agar Suspicious ho toh Red, warna Cyan
+            color = (0, 0, 255) if "Suspicious" in behavior_status else (255, 255, 0)
+            cv2.putText(frame, f"Behavior: {behavior_status}", (20, 240), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
     # 4. Draw Graph (Always)
     rppg_module.draw_graph(frame, np.array(green_signal))
