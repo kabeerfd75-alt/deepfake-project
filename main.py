@@ -30,9 +30,14 @@ if mode == "1":
     cap = cv2.VideoCapture(0)
     print("\n[+] Initializing Webcam...")
 else:
-    path = input("\n[?] Enter video path: ").strip().replace('"', '').replace("'", "")
-    cap = cv2.VideoCapture(path)
-    print(f"\n[+] Loading video: {path}")
+   # --- YAHAN CHANGE KAREIN ---
+    file_name = input("\n[?] Enter video filename (e.g., HAD1.mp4 or videoFK.mp4): ").strip()
+    
+    # Ye line 'videos' folder ko filename ke sath jorr degi
+    full_path = os.path.join("videos", file_name) 
+    
+    cap = cv2.VideoCapture(full_path)
+    print(f"\n[+] Loading video from folder: {full_path}")
 
 if not cap or not cap.isOpened():
     print("Error: Could not open video source.")

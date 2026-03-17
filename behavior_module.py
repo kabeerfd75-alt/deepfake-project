@@ -16,50 +16,50 @@ class BehaviorAnalyzer:
         self.EAR_THRESHOLD = 0.23 
         
         # Automata Variables
-        self.state = BlinkState.OPEN  # Shuruati state: Aankh khuli hai
-        self.blink_count = 0          # Total blinks store karne ke liye
+        self.state = BlinkState.OPEN  
+        self.blink_count = 0          
+        
+        # --- NEW: Slow Blink aur Noise control ke liye ---
+        self.cooldown_frames = 0 
+        self.MIN_COOLDOWN = 15  # Ek blink ke baad 15 frames tak doosra count lock rahega
 
     def _calculate_ear(self, landmarks, eye_indices):
         """Eye Aspect Ratio (EAR) nikalne ka formula"""
         pts = [np.array(landmarks[i]) for i in eye_indices]
-        # Vertical distances (Aankh ki unchai)
         v1 = np.linalg.norm(pts[1] - pts[5])
         v2 = np.linalg.norm(pts[2] - pts[4])
-        # Horizontal distance (Aankh ki chorai)
         h = np.linalg.norm(pts[0] - pts[3])
-        # EAR Formula
         ear = (v1 + v2) / (2.0 * h)
         return ear
 
     def detect_behavior(self, frame, landmarks, frame_count):
-        """
-        Main function jo blinking count karta hai
-        """
-        # MediaPipe ke landmark indices (Left aur Right Eye)
         LEFT_EYE = [33, 160, 158, 133, 153, 144]
         RIGHT_EYE = [362, 385, 387, 263, 373, 380]
         
-        # Dono aankhon ka EAR nikal kar average lena
         l_ear = self._calculate_ear(landmarks, LEFT_EYE)
         r_ear = self._calculate_ear(landmarks, RIGHT_EYE)
         avg_ear = (l_ear + r_ear) / 2.0
 
-        # --- AUTOMATA LOGIC START ---
+        # --- REFINED AUTOMATA LOGIC ---
         
-        # Agar aankh khuli hai aur EAR threshold se niche gir jaye (Aankh band ho rahi hai)
+        # 1. Cooldown timer ko kam karte raho (agar chal raha hai)
+        if self.cooldown_frames > 0:
+            self.cooldown_frames -= 1
+
+        # 2. Transition: OPEN se CLOSED (Aankh band ho rahi hai)
         if self.state == BlinkState.OPEN and avg_ear < self.EAR_THRESHOLD:
-            self.state = BlinkState.CLOSED # State badal kar 'CLOSED' kardo
+            # Agar cooldown zero hai tabhi 'CLOSED' state mein jao
+            if self.cooldown_frames == 0:
+                self.state = BlinkState.CLOSED
             
-        # Agar aankh band hai aur EAR threshold se upar aa jaye (Aankh wapas khul gayi)
+        # 3. Transition: CLOSED se OPEN (Aankh wapas khul gayi)
         elif self.state == BlinkState.CLOSED and avg_ear > self.EAR_THRESHOLD:
-            self.blink_count += 1       # Aik blink mukammal hui, count barhao
-            self.state = BlinkState.OPEN  # State wapas 'OPEN' kardo
-            
-        # --- AUTOMATA LOGIC END ---
+            self.blink_count += 1       # Aik blink count karo
+            self.state = BlinkState.OPEN  # Wapas OPEN state
+            self.cooldown_frames = self.MIN_COOLDOWN # Agle 15 frames ke liye lock laga do
 
         # Sirf Blinking Count return karna
         return f"Blinks Counted: {self.blink_count}"
 
     def get_final_report(self):
-        """Video ke aakhir mein count hasil karne ke liye"""
         return {"total_blinks": self.blink_count}
