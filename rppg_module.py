@@ -1,53 +1,76 @@
 import cv2
 import numpy as np
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, filtfilt, detrend
 
-def bandpass_filter(signal, low=0.7, high=4, fs=30):
-    nyq = 0.5 * fs
-    low /= nyq
-    high /= nyq
-    b, a = butter(1, [low, high], btype='band')
+def apply_bandpass(signal, fs=30):
+    # Strictly Human: 0.83Hz to 2.0Hz (Approx 50 to 120 BPM)
+    # Khalid Mehmood Rule: 140+ is noise for a sitting person.
+    low = 0.83 / (0.5 * fs)
+    high = 2.0 / (0.5 * fs)
+    b, a = butter(2, [low, high], btype='band')
+    
+    if len(signal) > 10:
+        signal = detrend(signal) # Movement artifacts hatane ke liye
+    
     return filtfilt(b, a, signal)
 
-def apply_fft(signal, fs=30):
+def apply_fft(signal, fs):
     n = len(signal)
-    freqs = np.fft.rfftfreq(n, d=1/fs)
-    fft_vals = np.abs(np.fft.rfft(signal - np.mean(signal)))
-    peak_index = np.argmax(fft_vals)
-    return freqs[peak_index] * 60, fft_vals[peak_index]
+    if n < fs * 5: # Minimum 5 seconds for stability
+        return 0, 0
 
-def check_periodicity(signal, fs=30):
-    signal = signal - np.mean(signal)
-    corr = np.correlate(signal, signal, mode='full')
-    corr = corr[corr.size//2:]
-    peak = np.max(corr[fs//2:])
-    return peak / np.sum(signal**2 + 1e-6)
+    filtered = apply_bandpass(signal, fs)
+    
+    # FFT Calculation
+    fft_vals = np.abs(np.fft.rfft(filtered))
+    freqs = np.fft.rfftfreq(n, d=1/fs)
+
+    # Valid human heart range (50 - 120 BPM)
+    valid_idx = np.where((freqs >= 0.83) & (freqs <= 2.0))[0]
+
+    if len(valid_idx) > 0:
+        # Peak Detection
+        best_idx = valid_idx[np.argmax(fft_vals[valid_idx])]
+        bpm = freqs[best_idx] * 60
+        
+        # SNR Logic: Peak power vs background noise
+        peak_power = fft_vals[best_idx]
+        total_power = np.sum(fft_vals[valid_idx])
+        snr = peak_power / (total_power - peak_power + 1e-6)
+        
+        # Khalid Mehmood Consistency Check:
+        # Agar SNR 0.2 se kam hai, matlab signal mein periodicity nahi hai (Deepfake sign)
+        confidence = snr * 10 
+        
+        # Strict BPM Cap: Noise rejection
+        if bpm > 130 or bpm < 45:
+            return 0, 0
+            
+        return bpm, confidence
+
+    return 0, 0
 
 def extract_skin_green(frame, landmarks):
     h, w, _ = frame.shape
-    # Forehead center
+    # Landmark 10: Forehead center (Best for rPPG)
     lm = landmarks.landmark[10]
     x, y = int(lm.x * w), int(lm.y * h)
-    r = 30
+
+    # ROI for forehead
+    r = int(min(h, w) * 0.035)
     roi = frame[max(0,y-r):min(h,y+r), max(0,x-r):min(w,x+r)]
 
     if roi.size == 0: return None, (x, y)
 
-    # HSV skin mask
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array([0,30,60]), np.array([20,150,255]))
-    green = roi[:,:,1]
-    green_skin = green[mask>0]
+    # YCrCb is superior for skin detection under varying light
+    ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
+    mask = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
 
-    return np.mean(green_skin) if len(green_skin) > 0 else None, (x, y)
+    green_channel = roi[:,:,1]
+    green_skin = green_channel[mask > 0]
 
-def draw_graph(frame, data):
-    graph_height, graph_width = 120, 300
-    graph = np.zeros((graph_height, graph_width, 3), dtype=np.uint8)
-    if len(data) > 1:
-        norm = (data - np.min(data)) / (np.max(data) - np.min(data) + 1e-6)
-        norm = (norm * (graph_height-10)).astype(int)
-        for i in range(1, len(norm)):
-            cv2.line(graph, (int((i-1)/len(norm)*graph_width), graph_height - norm[i-1]),
-                            (int(i/len(norm)*graph_width), graph_height - norm[i]), (0, 255, 0), 1)
-    frame[10:10+graph_height, 10:10+graph_width] = graph
+    if len(green_skin) > 20:
+        # Green channel has highest hemoglobin absorption info
+        return np.mean(green_skin), (x, y)
+    
+    return np.mean(green_channel), (x, y)

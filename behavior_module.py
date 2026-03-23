@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import time
 
 class BlinkState:
     OPEN = 0
@@ -8,31 +9,34 @@ class BlinkState:
 
 class BehaviorAnalyzer:
     def __init__(self):
-        # MediaPipe Face Mesh setup
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(refine_landmarks=True)
         
-        # Threshold: Isse niche EAR jayega toh aankh "Band" mani jayegi
-        self.EAR_THRESHOLD = 0.23 
+        # --- KHALID MEHMOOD LOGIC THRESHOLDS ---
+        self.EAR_THRESHOLD = 0.20  # Optimized for webcam noise
+        self.MIN_BLINK_FRAMES = 2  # Human fast blink
+        self.MAX_BLINK_FRAMES = 8  # Normal human blink duration limit
         
-        # Automata Variables
         self.state = BlinkState.OPEN  
-        self.blink_count = 0          
+        self.blink_count = 0 
+        self.unnatural_blink_count = 0
+        self.closed_frames_count = 0
         
-        # --- NEW: Slow Blink aur Noise control ke liye ---
-        self.cooldown_frames = 0 
-        self.MIN_COOLDOWN = 15  # Ek blink ke baad 15 frames tak doosra count lock rahega
+        self.start_time = time.time()
+        self.last_blink_time = time.time()
+        self.MAX_NO_BLINK_INTERVAL = 15 # 20s was too long for security
+
+        # --- DYNAMIC TRUST ENGINE ---
+        self.current_trust_score = 100
 
     def _calculate_ear(self, landmarks, eye_indices):
-        """Eye Aspect Ratio (EAR) nikalne ka formula"""
         pts = [np.array(landmarks[i]) for i in eye_indices]
         v1 = np.linalg.norm(pts[1] - pts[5])
         v2 = np.linalg.norm(pts[2] - pts[4])
         h = np.linalg.norm(pts[0] - pts[3])
-        ear = (v1 + v2) / (2.0 * h)
-        return ear
+        return (v1 + v2) / (2.0 * h)
 
-    def detect_behavior(self, frame, landmarks, frame_count):
+    def detect_behavior(self, frame, landmarks):
         LEFT_EYE = [33, 160, 158, 133, 153, 144]
         RIGHT_EYE = [362, 385, 387, 263, 373, 380]
         
@@ -40,26 +44,53 @@ class BehaviorAnalyzer:
         r_ear = self._calculate_ear(landmarks, RIGHT_EYE)
         avg_ear = (l_ear + r_ear) / 2.0
 
-        # --- REFINED AUTOMATA LOGIC ---
-        
-        # 1. Cooldown timer ko kam karte raho (agar chal raha hai)
-        if self.cooldown_frames > 0:
-            self.cooldown_frames -= 1
+        current_time = time.time()
+        time_since_last = current_time - self.last_blink_time
 
-        # 2. Transition: OPEN se CLOSED (Aankh band ho rahi hai)
+        # --- REFINED STATE MACHINE ---
         if self.state == BlinkState.OPEN and avg_ear < self.EAR_THRESHOLD:
-            # Agar cooldown zero hai tabhi 'CLOSED' state mein jao
-            if self.cooldown_frames == 0:
-                self.state = BlinkState.CLOSED
-            
-        # 3. Transition: CLOSED se OPEN (Aankh wapas khul gayi)
-        elif self.state == BlinkState.CLOSED and avg_ear > self.EAR_THRESHOLD:
-            self.blink_count += 1       # Aik blink count karo
-            self.state = BlinkState.OPEN  # Wapas OPEN state
-            self.cooldown_frames = self.MIN_COOLDOWN # Agle 15 frames ke liye lock laga do
+            self.state = BlinkState.CLOSED
+            self.closed_frames_count = 0 
 
-        # Sirf Blinking Count return karna
-        return f"Blinks Counted: {self.blink_count}"
+        elif self.state == BlinkState.CLOSED:
+            if avg_ear < self.EAR_THRESHOLD:
+                self.closed_frames_count += 1
+            else:
+                # BLINK COMPLETED: Validate Quality
+                if self.MIN_BLINK_FRAMES <= self.closed_frames_count <= self.MAX_BLINK_FRAMES:
+                    self.blink_count += 1
+                    self.last_blink_time = current_time
+                    # RECOVERY: Increase score based on consistency
+                    self.current_trust_score += 10 
+                else:
+                    self.unnatural_blink_count += 1
+                    # PENALTY: Heavy reduction for robotic movement
+                    self.current_trust_score -= 25
+                
+                self.state = BlinkState.OPEN
 
-    def get_final_report(self):
-        return {"total_blinks": self.blink_count}
+        # --- RATIO-BASED ADJUSTMENT (Professor Malik's Accuracy Fix) ---
+        # Agar Natural Blinks > Unnatural hain, toh score ko girne se rokna hai
+        total = self.blink_count + self.unnatural_blink_count
+        if total > 5:
+            unnatural_ratio = self.unnatural_blink_count / total
+            if unnatural_ratio > 0.3: # 30% se zyada kachra blinks
+                self.current_trust_score -= 2 # Constant drain
+
+        # No Blink for long time
+        if time_since_last > self.MAX_NO_BLINK_INTERVAL:
+            self.current_trust_score -= 0.5
+
+        # Final score clamping
+        self.current_trust_score = max(0, min(100, self.current_trust_score))
+
+        # Status Logic
+        if self.current_trust_score < 45:
+            behavior_status = "FAKE"
+        elif self.current_trust_score < 75:
+            behavior_status = "SUSPICIOUS"
+        else:
+            behavior_status = "REAL"
+
+        output_text = f"Blinks: {self.blink_count} (Unnatural: {self.unnatural_blink_count})"
+        return output_text, behavior_status, int(self.current_trust_score)
